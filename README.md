@@ -1,105 +1,153 @@
+<div align="center">
+
+<img src="./public/favicon.svg" width="88" alt="PacketProof logo" />
+
 # PacketProof
 
-**On-chain package release integrity attestation on GenLayer.**
+### On-chain release integrity for npm and PyPI packages, verified by independent GenLayer validators.
 
-PacketProof is a supply-chain security protocol that uses GenLayer's multi-validator intelligent contract consensus to independently verify every package release. Before a package reaches downstream consumers, multiple independent validators fetch the registry record and source commit, judge whether the changelog is honest, and produce a cryptographic attestation record — without any single party being able to fake it.
+<br />
 
-## What it does
+![Status](https://img.shields.io/badge/status-contract%20deployed-brightgreen?style=flat-square)
+![Network](https://img.shields.io/badge/network-StudioNet-blue?style=flat-square)
+![Tests](https://img.shields.io/badge/direct--mode%20tests-82%20passing-brightgreen?style=flat-square)
+![Stack](https://img.shields.io/badge/stack-React%20%2B%20Vite%20%2B%20GenVM-7c3aed?style=flat-square)
+![License](https://img.shields.io/badge/license-MIT-lightgrey?style=flat-square)
 
-1. A maintainer **locks a release intent** on-chain before publishing (package name, version, commit SHA, repository URL).
-2. After publishing, they **submit a snapshot** with the dist-hash and changelog.
-3. **Multi-validator consensus** independently fetches the npm/PyPI registry and the commit diff, then judges three rules:
-   - Is a changelog present?
-   - Does the changelog honestly describe the diff?
-   - Is the version bump consistent with the scope of changes?
-4. The contract deterministically derives `VERIFIED`, `INCONCLUSIVE`, or `BLOCKED`.
-5. Any wallet can **challenge** a verified release with evidence during the review window.
-6. After the review window, the owner can **certify** — producing a permanent on-chain attestation record.
+<br />
 
-## State machine
+**[Styled overview](https://htmlpreview.github.io/?https://github.com/Siriron/packetproof/blob/main/README.html)** &nbsp;·&nbsp; **[Documentation](./docs/architecture.md)** &nbsp;·&nbsp; **[Smart Contract](./contracts/packet_proof.py)** &nbsp;·&nbsp; **[Explorer](https://explorer-studio.genlayer.com/address/0xCE109f5c5b75b75Cb23ee95BA778BDC44A91A117)**
 
-```
-DRAFT → COMMIT_LOCKED → VERIFIED | INCONCLUSIVE | BLOCKED → CERTIFIED
-                                ↓
-                           CHALLENGED (open challenge)
-```
+</div>
 
-## Tech stack
+<br />
 
-| Layer | Technology |
+---
+
+## What this is
+
+A maintainer locks a release intent on-chain before publishing: package name, ecosystem, version and source commit. After publishing, GenLayer validators each fetch the live registry record and the commit diff, then agree on whether the changelog honestly describes the change. The result is a permanent attestation that downstream tools can read, with a challenge window before the release is certified.
+
+<br />
+
+<div align="center">
+
+| | |
 |---|---|
-| Intelligent contract | GenLayer Python contract (StudioNet chain 61999) |
-| Consensus | GenLayer multi-validator nondet with per-rule findings |
-| Frontend | React 18 + Vite + TypeScript |
-| Styling | Tailwind CSS + Framer Motion |
-| Wallet | MetaMask (EIP-1193) via `genlayer-js` |
-| Fonts | Space Grotesk + DM Sans + DM Mono (Google Fonts) |
+| **Concept** | Release integrity attestation with a public challenge window |
+| **Consensus need** | A maintainer who controls one registry mirror or one validator could make any release look clean; independent validators must each fetch the same record and diff and agree |
+| **Evidence source** | Registry record (npm or PyPI) and the GitHub commit diff, both fetched from URLs derived from the locked identifiers, never supplied by the caller |
+| **Network** | StudioNet |
 
-## Quick start
+</div>
 
-```bash
-npm install
-npm run dev          # http://localhost:5173
-```
+<br />
 
-Connect MetaMask; the app prompts you to add/switch to GenLayer StudioNet.
+---
+
+## How it works
+
+`DRAFT` → `COMMIT_LOCKED` → `VERIFIED` → (review window) → `CERTIFIED`, with `INCONCLUSIVE`, `BLOCKED`, `CHALLENGED` and `REVOKED` as the other states.
+
+1. **`register_package`** locks name, ecosystem, version, commit SHA, repo URL and review window. State: `DRAFT`.
+2. **`submit_snapshot`** submits post-publish evidence, authenticated against the live registry by consensus. State: `COMMIT_LOCKED`.
+3. **`attest_release`** fetches registry and commit diff across validators and derives the verdict deterministically. State: `VERIFIED`, `INCONCLUSIVE` or `BLOCKED`.
+4. **`open_challenge`** lets any non-owner submit evidence during the review window; consensus judges its relevance.
+5. **`reassess_challenge`** runs a fresh attestation with the challenge bound in. Anyone can call it.
+6. **`certify`** after the window closes with no open challenge; the attestation digest is re-verified on-chain. Terminal.
+7. **`revoke`** lets the owner withdraw any non-terminal release, so no state is a dead end.
+
+<br />
+
+<details>
+<summary><b>Per-rule verdicts</b></summary>
+<br />
+
+Each attestation judges three rules, each answered with one of `PRESERVED`, `CONSISTENT`, `INCONSISTENT`, `MISSING`, `UNREADABLE` or `CONFLICTING`:
+
+| Rule | Question | Blocking if |
+|---|---|---|
+| `changelog_present` | Is a changelog, release note or commit message present for this version? | `INCONSISTENT` |
+| `changelog_honest` | Does the changelog honestly describe the changes in the commit diff? | `INCONSISTENT` |
+| `version_consistent` | Is the version bump type consistent with the scope of the diff? | `INCONSISTENT` |
+
+Any `INCONSISTENT` gives `BLOCKED`. Any `MISSING`, `UNREADABLE` or `CONFLICTING`, unavailable evidence, or a registry/dist-hash mismatch gives `INCONCLUSIVE`. All `PRESERVED` or `CONSISTENT` gives `VERIFIED`.
+
+</details>
+
+<br />
+
+---
 
 ## Deployed contract
+
+<div align="center">
 
 | Network | Address | Explorer |
 |---|---|---|
 | StudioNet | `0xCE109f5c5b75b75Cb23ee95BA778BDC44A91A117` | [View](https://explorer-studio.genlayer.com/address/0xCE109f5c5b75b75Cb23ee95BA778BDC44A91A117) |
 
-## Deploy the contract
+</div>
 
-1. Paste `contracts/packet_proof.py` into [studio.genlayer.com](https://studio.genlayer.com) and deploy.
-2. Set `CONTRACT_ADDRESS` in `src/config/chains.ts` (a single plain constant; currently the StudioNet address above).
+<br />
 
-Full guide: `docs/deployment.md`.
+---
 
-## Checks
+## Quick start
+
+```bash
+npm install
+npm run dev
+```
+
+Run the contract tests (they execute the real contract under the GenVM SDK in direct mode):
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 82 direct-mode tests against the real contract
+pytest
 genvm-lint check contracts/packet_proof.py
-npm run check && npm run build
 ```
 
-## Testing status
+Full deployment instructions: [`docs/deployment.md`](./docs/deployment.md)
 
-The direct-mode suite executes the real contract under the GenVM SDK with the web and the LLM mocked. It
-proves state transitions, guards, retry bounds, the challenge lifecycle and validator agreement/disagreement.
-It does **not** prove real LLM behaviour, real registry responses, or live multi-validator consensus, and
-no live StudioNet run was performed for this audit.
+<br />
 
-## Known limitations
-
-- Anyone can register any package name/version (first come, first served); there is no proof the registrant
-  controls the package on the registry. Attestation says the release is internally consistent, not who the
-  maintainer is.
-- Challenge evidence URLs are supplied by the challenger by design; validators fetch and judge them.
-- The registry is capped at 200 package versions.
+---
 
 ## Project structure
 
 ```
-contracts/packet_proof.py     GenLayer intelligent contract
-tests/direct/                 direct-mode tests
-docs/                         architecture, contracts, deployment, frontend
-src/                          React + Vite frontend (App, components/, lib/, config/)
-LICENSE                       MIT
+contracts/packet_proof.py    The GenVM contract
+tests/direct/                Direct-mode tests (82)
+src/                         React + Vite app
+docs/                        architecture.md, deployment.md, contracts.md, frontend.md
+README.html                  Styled overview page
+LICENSE                      MIT
 ```
 
-## Security properties
+<br />
 
-- Registry fetch URL is derived from locked identifiers; the caller never supplies a URL.
-- The fetched record must echo the expected package name and version before it influences the verdict.
-- No owner bypass: cannot force-verify, force-certify, or replace a frozen snapshot.
-- Time comes from the transaction (`gl.message_raw["datetime"]`); no caller-supplied timestamp.
-- At most 3 challenges per generation; at most 3 ordinary attestations per package version.
-- All external content is labelled untrusted and sanitised before it reaches a prompt.
+---
 
-## License
+## Status
 
-MIT, see `LICENSE`.
+<div align="center">
+
+![Tested](https://img.shields.io/badge/contract%20logic%20and%20validators-tested-brightgreen?style=flat-square)
+![Untested](https://img.shields.io/badge/live%20LLM%20consensus%20and%20frontend-untested-yellow?style=flat-square)
+
+</div>
+
+The direct-mode suite runs the real contract with the web and the LLM mocked. It proves state transitions, guards, retry bounds, the challenge lifecycle, and validator agreement and disagreement on tampered payloads. It does not prove real LLM behaviour, real registry responses, live multi-validator timing, or the frontend against the live deployment.
+
+Known limitations: anyone can register any package name and version first, with no proof they control it on the registry; challenge evidence URLs are supplied by the challenger by design; the registry is capped at 200 package versions.
+
+<br />
+
+---
+
+<div align="center">
+
+Built on [GenLayer](https://genlayer.com) · Runner `py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6`
+
+</div>

@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PacketProof — GenLayer Package Integrity Attestation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:        #060914;
+    --surface:   #0d1220;
+    --surface2:  #111827;
+    --border:    rgba(255,255,255,0.07);
+    --indigo:    #818cf8;
+    --violet:    #a78bfa;
+    --cyan:      #67e8f9;
+    --emerald:   #34d399;
+    --amber:     #fbbf24;
+    --rose:      #fb7185;
+    --text:      #e2e8f0;
+    --muted:     #64748b;
+    --mono:      'DM Mono', monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Grid background ─────────────────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(129,140,248,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(129,140,248,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── Glows ───────────────────────────────────────────────────────────── */
+  .glow-top {
+    position: fixed; top: -200px; left: 50%; transform: translateX(-50%);
+    width: 900px; height: 500px;
+    background: radial-gradient(ellipse at center, rgba(99,102,241,0.18) 0%, transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  .wrap {
+    position: relative; z-index: 1;
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+
+  /* ── Hero ────────────────────────────────────────────────────────────── */
+  .hero {
+    padding: 72px 0 56px;
+    text-align: center;
+  }
+
+  .hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(99,102,241,0.12);
+    border: 1px solid rgba(99,102,241,0.25);
+    border-radius: 999px;
+    padding: 4px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--indigo);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 28px;
+  }
+
+  .hero-badge-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--indigo);
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.5; transform: scale(0.85); }
+  }
+
+  .hero h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: clamp(40px, 7vw, 72px);
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    background: linear-gradient(135deg, #e2e8f0 0%, var(--indigo) 50%, var(--violet) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 20px;
+  }
+
+  .hero-sub {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 560px;
+    margin: 0 auto 36px;
+    line-height: 1.6;
+  }
+
+  .hero-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 40px;
+  }
+
+  .tag {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.04em;
+  }
+
+  .tag.indigo { background: rgba(99,102,241,0.1);  border-color: rgba(99,102,241,0.3);  color: var(--indigo); }
+  .tag.violet { background: rgba(167,139,250,0.1); border-color: rgba(167,139,250,0.3); color: var(--violet); }
+  .tag.cyan   { background: rgba(103,232,249,0.1); border-color: rgba(103,232,249,0.3); color: var(--cyan); }
+  .tag.emerald{ background: rgba(52,211,153,0.1);  border-color: rgba(52,211,153,0.3);  color: var(--emerald); }
+
+  /* ── State machine diagram ───────────────────────────────────────────── */
+  .state-diagram {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 0;
+    margin: 32px 0;
+  }
+
+  .state-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .state-box {
+    padding: 8px 16px;
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid;
+    white-space: nowrap;
+  }
+
+  .state-box.draft    { background: rgba(100,116,139,0.1); border-color: rgba(100,116,139,0.3); color: #94a3b8; }
+  .state-box.locked   { background: rgba(251,191,36,0.1);  border-color: rgba(251,191,36,0.3);  color: var(--amber); }
+  .state-box.verified { background: rgba(99,102,241,0.12); border-color: rgba(99,102,241,0.35); color: var(--indigo); }
+  .state-box.blocked  { background: rgba(251,113,133,0.1); border-color: rgba(251,113,133,0.3); color: var(--rose); }
+  .state-box.challenged{ background: rgba(251,191,36,0.08);border-color: rgba(251,191,36,0.25); color: #fcd34d; }
+  .state-box.certified{ background: rgba(52,211,153,0.1);  border-color: rgba(52,211,153,0.3);  color: var(--emerald); }
+  .state-box.revoked  { background: rgba(100,116,139,0.06);border-color: rgba(100,116,139,0.2); color: #475569; }
+
+  .state-label { font-size: 10px; color: var(--muted); font-family: var(--mono); }
+
+  .arrow {
+    font-size: 16px;
+    color: var(--muted);
+    padding: 0 6px;
+    line-height: 1;
+  }
+
+  /* ── Cards ───────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 20px;
+  }
+
+  .card + .card { margin-top: 0; }
+
+  .card-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--indigo);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .card-title::before {
+    content: '';
+    display: inline-block;
+    width: 3px; height: 16px;
+    background: linear-gradient(to bottom, var(--indigo), var(--violet));
+    border-radius: 2px;
+  }
+
+  /* ── Section headings ────────────────────────────────────────────────── */
+  h2 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: #f1f5f9;
+    margin: 56px 0 20px;
+  }
+
+  h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 18px;
+    font-weight: 600;
+    color: #e2e8f0;
+    margin: 32px 0 12px;
+  }
+
+  p { margin-bottom: 16px; color: #94a3b8; }
+  p:last-child { margin-bottom: 0; }
+
+  a { color: var(--indigo); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  strong { color: var(--text); font-weight: 600; }
+
+  /* ── Code blocks ─────────────────────────────────────────────────────── */
+  pre {
+    background: rgba(0,0,0,0.35);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 22px;
+    overflow-x: auto;
+    margin: 16px 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.65;
+    color: #cbd5e1;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 12.5px;
+    background: rgba(99,102,241,0.1);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--indigo);
+  }
+
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 13px;
+    color: inherit;
+  }
+
+  .kw  { color: var(--violet); }
+  .st  { color: var(--emerald); }
+  .cm  { color: #475569; }
+  .fn  { color: var(--cyan); }
+  .nu  { color: var(--amber); }
+
+  /* ── Tables ──────────────────────────────────────────────────────────── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    margin: 16px 0;
+  }
+
+  th {
+    text-align: left;
+    padding: 10px 14px;
+    background: rgba(255,255,255,0.03);
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: #94a3b8;
+    vertical-align: top;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  td:first-child { font-family: var(--mono); font-size: 12.5px; color: var(--indigo); }
+
+  /* ── Bug fix grid ────────────────────────────────────────────────────── */
+  .bug-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+    gap: 14px;
+    margin: 20px 0;
+  }
+
+  .bug-card {
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border);
+    border-left: 3px solid;
+    border-radius: 10px;
+    padding: 16px 18px;
+  }
+
+  .bug-card.fixed { border-left-color: var(--emerald); }
+  .bug-card.warn  { border-left-color: var(--amber); }
+
+  .bug-id {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .bug-card.fixed .bug-id { color: var(--emerald); }
+  .bug-card.warn  .bug-id { color: var(--amber); }
+
+  .bug-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
+  .bug-desc  { font-size: 12.5px; color: var(--muted); line-height: 1.6; }
+
+  /* ── Flow steps ──────────────────────────────────────────────────────── */
+  .flow {
+    counter-reset: step;
+    list-style: none;
+    margin: 20px 0;
+  }
+
+  .flow li {
+    counter-increment: step;
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    padding: 16px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .flow li:last-child { border-bottom: none; }
+
+  .flow-num {
+    flex-shrink: 0;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: rgba(99,102,241,0.15);
+    border: 1px solid rgba(99,102,241,0.3);
+    color: var(--indigo);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .flow-body h4 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+  }
+
+  .flow-body p { font-size: 13px; margin: 0; }
+
+  /* ── Nondet block visual ─────────────────────────────────────────────── */
+  .nondet-panel {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin: 16px 0;
+  }
+
+  @media (max-width: 640px) { .nondet-panel { grid-template-columns: 1fr; } }
+
+  .nondet-box {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+
+  .nondet-box-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .nondet-box.leader .nondet-box-title { color: var(--indigo); }
+  .nondet-box.validator .nondet-box-title { color: var(--violet); }
+
+  .nondet-box ul {
+    list-style: none;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .nondet-box ul li::before { content: '→ '; color: var(--indigo); }
+
+  /* ── TOC ─────────────────────────────────────────────────────────────── */
+  .toc {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin-bottom: 40px;
+  }
+
+  .toc-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  .toc ol {
+    padding-left: 20px;
+    color: var(--muted);
+    font-size: 13.5px;
+    line-height: 2;
+  }
+
+  .toc a { color: var(--muted); }
+  .toc a:hover { color: var(--indigo); text-decoration: none; }
+
+  /* ── Footer ──────────────────────────────────────────────────────────── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 32px 0 0;
+    margin-top: 64px;
+    text-align: center;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  footer span { color: var(--indigo); }
+
+  /* ── Misc ────────────────────────────────────────────────────────────── */
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+
+  .verdict-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px;
+    margin: 16px 0;
+  }
+
+  .verdict-box {
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-align: center;
+  }
+
+  .verdict-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    margin-bottom: 4px;
+  }
+
+  .verdict-desc { font-size: 11.5px; color: var(--muted); }
+
+  .v-preserved  .verdict-name { color: var(--emerald); }
+  .v-consistent .verdict-name { color: var(--cyan); }
+  .v-inconsistent .verdict-name { color: var(--rose); }
+  .v-missing    .verdict-name { color: var(--amber); }
+  .v-unreadable .verdict-name { color: #94a3b8; }
+  .v-conflicting .verdict-name { color: var(--violet); }
+
+  blockquote {
+    border-left: 3px solid rgba(99,102,241,0.4);
+    padding: 12px 20px;
+    margin: 16px 0;
+    background: rgba(99,102,241,0.05);
+    border-radius: 0 8px 8px 0;
+    color: #94a3b8;
+    font-size: 14px;
+    font-style: italic;
+  }
+</style>
+</head>
+<body>
+<div class="glow-top"></div>
+
+<div class="wrap">
+
+  <!-- ── Hero ──────────────────────────────────────────────────────────── -->
+  <header class="hero">
+    <div class="hero-badge">
+      <span class="hero-badge-dot"></span>
+      GenLayer Intelligent Contract
+    </div>
+    <h1>PacketProof</h1>
+    <p class="hero-sub">
+      On-chain package release integrity attestation. Multi-validator consensus verifies
+      that what you shipped matches what you claimed — before any downstream consumer trusts it.
+    </p>
+    <div class="hero-tags">
+      <span class="tag indigo">py-genlayer:1jb45aa8…</span>
+      <span class="tag violet">StudioNet</span>
+      <span class="tag cyan">npm · pypi</span>
+      <span class="tag emerald">No staking</span>
+      <span class="tag">React · TypeScript · Vite</span>
+      <span class="tag">genlayer-js 1.1.8</span>
+    </div>
+
+    <!-- State machine diagram -->
+    <div class="state-diagram">
+      <div class="state-node">
+        <div class="state-box draft">DRAFT</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="state-node">
+        <div class="state-box locked">COMMIT_LOCKED</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="state-node">
+        <div class="state-box verified">VERIFIED</div>
+        <div class="state-label">review window</div>
+      </div>
+      <div class="arrow">→</div>
+      <div class="state-node">
+        <div class="state-box certified">CERTIFIED</div>
+        <div class="state-label">terminal</div>
+      </div>
+    </div>
+    <div class="state-diagram" style="margin-top:-12px">
+      <div class="state-node" style="opacity:0;width:80px"></div>
+      <div class="arrow" style="opacity:0">→</div>
+      <div class="state-node">
+        <div class="state-box blocked">BLOCKED</div>
+      </div>
+      <div class="arrow"> / </div>
+      <div class="state-node">
+        <div class="state-box" style="background:rgba(100,116,139,0.08);border-color:rgba(100,116,139,0.2);color:#64748b">INCONCLUSIVE</div>
+      </div>
+      <div class="arrow"> / </div>
+      <div class="state-node">
+        <div class="state-box revoked">REVOKED</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── TOC ───────────────────────────────────────────────────────────── -->
+  <nav class="toc">
+    <div class="toc-title">Contents</div>
+    <ol>
+      <li><a href="#concept">Concept &amp; Motivation</a></li>
+      <li><a href="#why-consensus">Why Multi-Validator Consensus</a></li>
+      <li><a href="#contract">Intelligent Contract</a></li>
+      <li><a href="#audit">Audit &amp; Bug Fixes</a></li>
+      <li><a href="#tests">Direct-Mode Tests</a></li>
+      <li><a href="#frontend">Frontend App</a></li>
+      <li><a href="#quickstart">Quick-Start</a></li>
+      <li><a href="#deploy">Deploy</a></li>
+      <li><a href="#structure">Project Structure</a></li>
+    </ol>
+  </nav>
+
+  <!-- ── Concept ───────────────────────────────────────────────────────── -->
+  <h2 id="concept">Concept &amp; Motivation</h2>
+
+  <div class="card">
+    <div class="card-title">The Supply-Chain Integrity Problem</div>
+    <p>
+      The npm and PyPI ecosystems ship billions of package installs per month.
+      A maintainer who publishes a release with a misleading changelog — or whose
+      release bytes differ from the committed source — can introduce vulnerabilities
+      with no on-chain record of the discrepancy. No existing protocol locks a
+      cryptographic pre-commitment to a release intent before publication, then
+      independently verifies the published artifact against that commitment using
+      multiple validators who cannot collude.
+    </p>
+    <p>
+      <strong>PacketProof fills that gap.</strong> Before publishing, the maintainer
+      locks four fields on-chain: package name, registry ecosystem, version, and
+      source commit SHA. After publication, the contract independently derives
+      the registry URL from those locked identifiers (the caller never supplies
+      a URL), fetches the live registry record across multiple GenLayer validators,
+      verifies the dist-hash commitment, and uses consensus to judge whether the
+      changelog honestly describes the changes in the commit diff. The result is a
+      permanent, tamper-evident attestation record any downstream tool can read.
+    </p>
+  </div>
+
+  <blockquote>
+    "A supply-chain attacker who controls the registry response on one validator
+    cannot control it on all validators simultaneously."
+  </blockquote>
+
+  <!-- ── Why consensus ─────────────────────────────────────────────────── -->
+  <h2 id="why-consensus">Why Multi-Validator Consensus</h2>
+
+  <div class="card">
+    <div class="card-title">The Adversarial Case</div>
+    <p>
+      Single-party fetch cannot prove integrity. A maintainer who controls both
+      the package registry and a single-validator chain can craft a response
+      that makes any release look clean. GenLayer's optimistic execution model
+      runs the same leader function on multiple independent validators, each
+      fetching the registry live. For a CERTIFIED outcome to be issued:
+    </p>
+    <ul style="margin:12px 0 16px;padding-left:24px;color:#94a3b8;font-size:14px;line-height:1.9">
+      <li>Every validator must independently fetch the same registry record</li>
+      <li>Every validator must independently fetch the same commit diff</li>
+      <li>The payload hash must match across validators (enforced by <code>validator_fn</code>)</li>
+      <li>The deterministic verdict must be <code>VERIFIED</code> on all fields</li>
+      <li>The certification proof must re-verify the attestation digest on-chain</li>
+    </ul>
+    <p>
+      The challenge window adds a second adversarial layer: any non-owner address
+      can submit evidence during the review period. If the evidence is judged
+      relevant by consensus, a fresh independent attestation is triggered.
+    </p>
+  </div>
+
+  <!-- ── Contract ──────────────────────────────────────────────────────── -->
+  <h2 id="contract">Intelligent Contract</h2>
+
+  <h3>Evidence Binding (Rules 0.7 + 0.8)</h3>
+  <div class="card">
+    <div class="card-title">Deterministic URL Derivation</div>
+    <p>
+      The caller never supplies a fetch URL. Every fetch target is derived
+      deterministically from the locked on-chain identifiers. This is Rule 0.7
+      from the GenLayer Agent Playbook: a caller who supplies their own URL can
+      point the contract at an attacker-controlled mirror.
+    </p>
+    <pre><code><span class="cm"># npm registry — locked package_name + version only</span>
+<span class="fn">_registry_url</span>(<span class="st">"npm"</span>, <span class="st">"mylib"</span>, <span class="st">"1.2.3"</span>)
+<span class="cm"># → https://registry.npmjs.org/mylib/1.2.3</span>
+
+<span class="cm"># pypi registry</span>
+<span class="fn">_registry_url</span>(<span class="st">"pypi"</span>, <span class="st">"requests"</span>, <span class="st">"2.31.0"</span>)
+<span class="cm"># → https://pypi.org/pypi/requests/2.31.0/json</span>
+
+<span class="cm"># commit diff — locked repository_url + commit_sha</span>
+<span class="fn">_commit_urls</span>(<span class="st">"https://github.com/myorg/mylib"</span>, <span class="st">"abc123..."</span>)
+<span class="cm"># → (.../commit/abc123....diff, .../commit/abc123...)  # Bug 9 fix</span></code></pre>
+
+    <p>
+      Rule 0.8 (echo check): after fetching the registry record, the contract
+      verifies the record refers back to the locked identifiers before it influences
+      the verdict. A MITM that returns a different package's metadata is rejected.
+    </p>
+  </div>
+
+  <h3>Four Nondet Call Sites</h3>
+
+  <div class="nondet-panel">
+    <div class="nondet-box leader">
+      <div class="nondet-box-title">leader_fn</div>
+      <ul>
+        <li>Fetches live registry endpoint</li>
+        <li>Performs Rule 0.8 echo check</li>
+        <li>Fetches commit diff (raw + fallback)</li>
+        <li>Calls <code>exec_prompt</code> for semantic judgment</li>
+        <li>Returns full payload dict with all decision fields</li>
+      </ul>
+    </div>
+    <div class="nondet-box validator">
+      <div class="nondet-box-title">validator_fn</div>
+      <ul>
+        <li>Checks <code>isinstance(leaders_res, gl.vm.Return)</code> first</li>
+        <li>Reads <code>.calldata</code> — never <code>json.loads</code></li>
+        <li>Re-runs <code>leader_fn()</code> independently</li>
+        <li>Uses <code>_payload_matches</code> on all non-explanation fields</li>
+        <li>Validates <code>leader_explanations</code> shape separately</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Verdict Rules</h3>
+  <div class="verdict-grid">
+    <div class="verdict-box v-preserved">
+      <div class="verdict-name">PRESERVED</div>
+      <div class="verdict-desc">Requirement fully met</div>
+    </div>
+    <div class="verdict-box v-consistent">
+      <div class="verdict-name">CONSISTENT</div>
+      <div class="verdict-desc">Acceptable variation</div>
+    </div>
+    <div class="verdict-box v-inconsistent">
+      <div class="verdict-name">INCONSISTENT</div>
+      <div class="verdict-desc">Blocking violation</div>
+    </div>
+    <div class="verdict-box v-missing">
+      <div class="verdict-name">MISSING</div>
+      <div class="verdict-desc">Evidence absent</div>
+    </div>
+    <div class="verdict-box v-unreadable">
+      <div class="verdict-name">UNREADABLE</div>
+      <div class="verdict-desc">Evidence malformed</div>
+    </div>
+    <div class="verdict-box v-conflicting">
+      <div class="verdict-name">CONFLICTING</div>
+      <div class="verdict-desc">Evidence contradicts</div>
+    </div>
+  </div>
+
+  <h3>Per-Rule Semantic Questions</h3>
+  <table>
+    <thead>
+      <tr><th>Rule ID</th><th>Question</th><th>BLOCKING if</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>changelog_present</td>
+        <td>Is a changelog, release note, or commit message present and non-empty for this version?</td>
+        <td>INCONSISTENT</td>
+      </tr>
+      <tr>
+        <td>changelog_honest</td>
+        <td>Does the changelog honestly describe the changes visible in the commit diff? Are there unmentioned additions, removals, or modifications?</td>
+        <td>INCONSISTENT</td>
+      </tr>
+      <tr>
+        <td>version_consistent</td>
+        <td>Is the version bump type (patch/minor/major) consistent with the scope of changes in the diff?</td>
+        <td>INCONSISTENT</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>Lifecycle Flow</h3>
+  <ol class="flow">
+    <li>
+      <div class="flow-num">1</div>
+      <div class="flow-body">
+        <h4>register_package()</h4>
+        <p>Lock release intent on-chain. Validates semver, hex SHA, repo URL prefix, review window bounds. Returns <code>pkg_key</code>. State: <code>DRAFT</code>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="flow-num">2</div>
+      <div class="flow-body">
+        <h4>submit_snapshot()</h4>
+        <p>After publication, owner submits a post-capture snapshot. Contract independently authenticates it against the live registry via nondet consensus. State: <code>COMMIT_LOCKED</code>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="flow-num">3</div>
+      <div class="flow-body">
+        <h4>attest_release()</h4>
+        <p>Run full semantic attestation. Fetches registry + commit diff across validators; derives verdict deterministically. Up to 3 ordinary retries, 5 total. State: <code>VERIFIED</code> / <code>INCONCLUSIVE</code> / <code>BLOCKED</code>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="flow-num">4</div>
+      <div class="flow-body">
+        <h4>open_challenge() <span style="font-weight:400;color:#64748b">— non-owner only</span></h4>
+        <p>During the review window, any non-owner may submit evidence. Evidence URL is independently fetched and judged for relevance by consensus. Up to 3 challenges per generation. State: <code>CHALLENGED</code>.</p>
+      </div>
+    </li>
+    <li>
+      <div class="flow-num">5</div>
+      <div class="flow-body">
+        <h4>reassess_challenge()</h4>
+        <p>Run a fresh attestation with the challenge context bound into the payload. Resolves the challenge and updates the package state.</p>
+      </div>
+    </li>
+    <li>
+      <div class="flow-num">6</div>
+      <div class="flow-body">
+        <h4>certify()</h4>
+        <p>After the review window closes and all challenges are resolved, owner calls <code>certify()</code>. The contract re-derives and verifies the attestation digest on-chain before issuing the <code>certification_digest</code>. Terminal state: <code>CERTIFIED</code>.</p>
+      </div>
+    </li>
+  </ol>
+
+  <!-- ── Audit ──────────────────────────────────────────────────────────── -->
+  <h2 id="audit">Audit &amp; Bug Fixes</h2>
+
+  <p>
+    The contract was audited in full against the GenLayer Agent Playbook (Oct 2026),
+    covering all 16 knowledge documents including the confirmed genlayer-test cheatcodes,
+    the official-source deltas, portal results, and the <code>status_code</code> bug catalogue.
+    Four bugs were found and fixed in the first audit; a second audit found and fixed seven more (E1&ndash;E7).
+  </p>
+
+  <div class="bug-grid">
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug A — Fixed</div>
+      <div class="bug-title">Module-level gl.nondet.* calls</div>
+      <div class="bug-desc">
+        <code>_fetch_json</code> and <code>_fetch_text</code> were defined at module level
+        containing <code>gl.nondet.web.get()</code>. The genvm-linter (E010) rejects any
+        module-level helper with nondet calls. Fixed: both helpers are now nested closures
+        inside every <code>leader_fn</code> that needs them. Module level contains zero
+        <code>gl.nondet.*</code> calls.
+      </div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug B — Fixed</div>
+      <div class="bug-title">run_nondet_unsafe called from plain instance method</div>
+      <div class="bug-desc">
+        <code>_verify_challenge_evidence</code> was a plain instance method that called
+        <code>gl.vm.run_nondet_unsafe()</code> via <code>self.</code>. Per Playbook §4
+        Bug 6: the method containing <code>run_nondet_unsafe</code> must be the
+        <code>@gl.public.write</code> body itself. Fixed: inlined entirely into
+        <code>open_challenge</code>. The <code>leader_fn</code>/<code>validator_fn</code>
+        closures now have zero <code>self.</code> references.
+      </div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug C — Fixed</div>
+      <div class="bug-title">Dead ternary branch in generation assignment</div>
+      <div class="bug-desc">
+        In <code>_run_attestation</code>, a ternary expression on line 660 was immediately
+        overwritten by the following <code>if kind == "ORDINARY"</code> block, making the
+        ternary unreachable dead code. Fixed: replaced with a single clean <code>if/else</code>
+        branch.
+      </div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug D — Fixed</div>
+      <div class="bug-title">Views returned raw dict / list — GenVM schema error</div>
+      <div class="bug-desc">
+        All 10 view methods were annotated <code>-&gt; dict</code> or <code>-&gt; list</code>
+        and returned those types directly. Per Playbook Tier 1 rule: all views must return
+        <code>str</code> via <code>json.dumps()</code>. The GenVM schema layer rejects a
+        non-string view return before any logic runs. Fixed: every view now returns
+        <code>_dumps(...)</code> and is annotated <code>-&gt; str</code>.
+      </div>
+    </div>
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E1 — Fixed</div>
+      <div class="bug-title">copy_to_memory on plain dicts</div>
+      <div class="bug-desc"><code>gl.storage.copy_to_memory()</code> was called on dicts parsed from JSON strings; the SDK asserts on non-storage values, so <code>submit_snapshot</code>, <code>attest_release</code> and <code>open_challenge</code> reverted. Now detached JSON copies.</div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E2 — Fixed</div>
+      <div class="bug-title">Timestamp source</div>
+      <div class="bug-desc"><code>datetime.now()</code> replaced by an integer-only parser of <code>gl.message_raw["datetime"]</code>.</div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E3 — Fixed</div>
+      <div class="bug-title">Ordinary-retry limit never fired</div>
+      <div class="bug-desc">Each ordinary attempt opened a fresh generation whose count was 0. The limit is now counted per package version.</div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E4 — Fixed</div>
+      <div class="bug-title">list_packages lost old packages</div>
+      <div class="bug-desc">It was rebuilt from a 300-slot event ring. Now backed by a real <code>package_index</code>.</div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E5 — Fixed</div>
+      <div class="bug-title">Non-object registry JSON</div>
+      <div class="bug-desc">A valid-JSON-but-not-object reply crashed <code>leader_fn</code> so consensus could never settle. Now treated as unavailable.</div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E6 — Fixed</div>
+      <div class="bug-title">Dist-hash format mismatch</div>
+      <div class="bug-desc">Only <code>key:value</code> matched while the UI says to paste the bare registry value. Both forms match now.</div>
+    </div>
+
+    <div class="bug-card fixed">
+      <div class="bug-id">Bug E7 — Fixed</div>
+      <div class="bug-title">In-place mutation</div>
+      <div class="bug-desc">The consensus result is copied before fields are added.</div>
+    </div>
+
+  </div>
+
+  <!-- ── Tests ─────────────────────────────────────────────────────────── -->
+  <h2 id="tests">Direct-Mode Tests</h2>
+
+  <div class="card">
+    <div class="card-title">Test Suite Coverage</div>
+    <p>
+      Tests use <code>genlayer-test==0.29.2</code> from PyPI (confirmed working with
+      the pinned runner). They run in direct mode — every nondet call is mocked via
+      <code>direct_vm.mock_llm()</code>. The suite covers every reachable verdict, all
+      guard conditions, validator re-derivation, and the full lifecycle.
+    </p>
+    <p style="color:#64748b;font-size:13px">
+      Direct mode does not prove real-LLM behaviour or multi-node consensus timing.
+      It verifies deterministic paths, guard checks, state transitions, and
+      validator re-derivation logic.
+    </p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>Area</th><th>Cases</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Registration</td><td>Happy path, every validation guard, duplicate guard, case-normalised keys, package limit</td></tr>
+      <tr><td>Snapshot</td><td>Happy path, schema guards, identity mismatches, digest mismatch, registry unavailable, auth failure</td></tr>
+      <tr><td>Attestation</td><td>VERIFIED, BLOCKED, INCONCLUSIVE, state and owner guards, ordinary and total retry limits, bare and keyed dist-hash forms, non-object registry reply</td></tr>
+      <tr><td>Challenge</td><td>Evidence admitted, irrelevant evidence, owner cannot challenge, window closed, challenge limit</td></tr>
+      <tr><td>Reassess</td><td>VERIFIED preserved, downgraded to BLOCKED, no open challenge</td></tr>
+      <tr><td>Certify / Revoke</td><td>Happy path, window still open, challenge open, terminal states, revoke from CHALLENGED</td></tr>
+      <tr><td>Views</td><td>All get_* views, packages_of with mixed-case address, list_packages past event-ring rollover</td></tr>
+      <tr><td>Validator</td><td>Honest leader agrees; tampered digest, findings, route or leader error rejected; pickling check</td></tr>
+      <tr><td>Lifecycle</td><td>DRAFT &rarr; CERTIFIED; DRAFT &rarr; CHALLENGED &rarr; VERIFIED &rarr; CERTIFIED</td></tr>
+    </tbody>
+  </table>
+  <p style="color:#64748b;font-size:13px">82 tests, all passing against the real contract.</p>
+
+  <h3>Running the Tests</h3>
+  <pre><code><span class="cm"># from the packetproof/ directory</span>
+pip install <span class="st">"genlayer-test==0.29.2"</span>
+pytest tests/ -v
+
+<span class="cm"># expected: all tests pass
+# NOTE: do not use -s (direct-mode stdout constraint, Playbook §14)</span></code></pre>
+
+  <!-- ── Frontend ──────────────────────────────────────────────────────── -->
+  <h2 id="frontend">Frontend App</h2>
+
+  <div class="card">
+    <div class="card-title">Stack</div>
+    <table style="margin:0">
+      <thead><tr><th>Layer</th><th>Library</th></tr></thead>
+      <tbody>
+        <tr><td>Framework</td><td>React 18 + TypeScript (Vite 5)</td></tr>
+        <tr><td>Styling</td><td>Tailwind CSS v3</td></tr>
+        <tr><td>Animations</td><td>Framer Motion — page transitions + state badge pulses</td></tr>
+        <tr><td>Icons</td><td>Lucide React</td></tr>
+        <tr><td>Wallet</td><td>MetaMask / EIP-1193 via <code>window.ethereum</code></td></tr>
+        <tr><td>Chain SDK</td><td><code>genlayer-js@1.1.8</code></td></tr>
+        <tr><td>Fonts</td><td>Space Grotesk (headings) · DM Sans (body) · DM Mono (code)</td></tr>
+        <tr><td>Theme</td><td>Anime dark — deep space canvas, indigo/violet/cyan glows, frosted glass surfaces</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="card-title">Layout</div>
+    <pre style="margin:0"><code>┌──────────────────────────────────────────────────────────────┐
+│  Header: PacketProof logo · Contract explorer link · Wallet  │
+├────────────────┬────────────────────────┬────────────────────┤
+│ PackageList    │  PackageDetailPanel    │  ActivityFeed      │
+│ (280 px)       │  flex-1                │  (240 px)          │
+│                │                        │                    │
+│  · My packages │  · State badge         │  · Event log       │
+│  · All packages│  · Register/Snapshot   │  · Live updates    │
+│  · Search      │  · Attest/Certify      │  · Tx hashes       │
+│                │  · Challenge panel     │                    │
+└────────────────┴────────────────────────┴────────────────────┘
+Mobile: single panel with back navigation</code></pre>
+  </div>
+
+  <!-- ── Quick-start ────────────────────────────────────────────────────── -->
+  <h2 id="quickstart">Quick-Start</h2>
+
+  <pre><code><span class="cm"># Clone</span>
+git clone https://github.com/Siriron/packetproof
+<span class="kw">cd</span> packetproof
+
+<span class="cm"># Install frontend deps</span>
+npm install
+
+<span class="cm"># Start dev server</span>
+npm run dev
+<span class="cm"># → http://localhost:5173</span>
+
+<span class="cm"># Run contract tests (executes the real contract in direct mode)</span>
+pip install -r requirements-dev.txt
+pytest</code></pre>
+
+  <!-- ── Deploy ────────────────────────────────────────────────────────── -->
+  <h2 id="deploy">Deploy</h2>
+
+  <h3>1. Deploy the Contract</h3>
+  <ol style="padding-left:24px;color:#94a3b8;font-size:14px;line-height:2.2">
+    <li>Open <a href="https://studio.genlayer.com" target="_blank">studio.genlayer.com</a></li>
+    <li>Create a new project, paste the contents of <code>contracts/packet_proof.py</code></li>
+    <li>Click <strong>Deploy</strong> — no constructor arguments needed</li>
+    <li>Copy the deployed contract address from the StudioNet explorer</li>
+    <li>Update <code>src/config/chains.ts</code> → <code>CONTRACT_ADDRESS</code></li>
+  </ol>
+
+  <h3>2. Deploy the Frontend</h3>
+  <pre><code><span class="cm"># Build</span>
+npm run build
+
+<span class="cm"># Vercel: import the repo (framework: Vite). Netlify: drag the dist/ folder.</span>
+<span class="cm"># vercel.json SPA rewrite is already configured</span></code></pre>
+
+  <!-- ── Structure ──────────────────────────────────────────────────────── -->
+  <h2 id="structure">Project Structure</h2>
+
+  <pre><code>packetproof/
+&boxvr;&boxh;&boxh; contracts/
+&boxv;   &boxur;&boxh;&boxh; packet_proof.py       <span class="cm"># GenLayer intelligent contract</span>
+&boxvr;&boxh;&boxh; tests/direct/             <span class="cm"># direct-mode tests (82)</span>
+&boxvr;&boxh;&boxh; docs/                     <span class="cm"># architecture, contracts, deployment, frontend</span>
+&boxvr;&boxh;&boxh; src/                      <span class="cm"># React/TypeScript frontend</span>
+&boxv;   &boxvr;&boxh;&boxh; App.tsx
+&boxv;   &boxvr;&boxh;&boxh; components/         <span class="cm"># panels, TxStatus (useTx), badges, background</span>
+&boxv;   &boxvr;&boxh;&boxh; lib/                <span class="cm"># genlayer.ts, useGenLayer.ts, types.ts</span>
+&boxv;   &boxur;&boxh;&boxh; config/chains.ts   <span class="cm"># CONTRACT_ADDRESS + explorer URLs</span>
+&boxvr;&boxh;&boxh; pyproject.toml            <span class="cm"># pytest config</span>
+&boxvr;&boxh;&boxh; README.html               <span class="cm"># styled overview page</span>
+&boxur;&boxh;&boxh; vercel.json               <span class="cm"># SPA rewrite rule</span></code></pre>
+
+  <hr />
+
+  <footer>
+    <p>
+      Built with <span>GenLayer</span> · Intelligent contract runner
+      <code>py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6</code>
+    </p>
+    <p style="margin-top:8px;color:#334155">
+      PacketProof · No staking · No value transfers · Permanent attestation record
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
