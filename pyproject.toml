@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Direct-mode tests: do NOT pass -s (it breaks the stdin the GenVM loader injects).
+addopts = "-q -p no:cacheprovider"

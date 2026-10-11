@@ -1,0 +1,37 @@
+{
+  "name": "packetproof",
+  "private": true,
+  "version": "1.0.0",
+  "description": "On-chain package release integrity attestation on GenLayer (StudioNet)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "oxlint --type-aware src",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run typecheck",
+    "test:contracts": "pytest",
+    "lint:contract": "genvm-lint check contracts/packet_proof.py"
+  },
+  "dependencies": {
+    "framer-motion": "^11.15.0",
+    "genlayer-js": "^1.1.8",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "oxlint": "^1.80.0",
+    "oxlint-tsgolint": "^7.0.2001",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "~7.0.2",
+    "vite": "^6.0.5"
+  }
+}
