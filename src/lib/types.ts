@@ -50,6 +50,9 @@ export interface AttestationRecord {
   registry_match: boolean
   dist_hash_match: boolean
   evidence_available: boolean
+  commit_evidence_available?: boolean
+  commit_patch_digest?: string
+  evidence_code?: string
   registry_record_digest: string
   locked_snapshot_digest: string
   attestation_digest: string

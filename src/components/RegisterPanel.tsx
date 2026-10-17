@@ -95,7 +95,7 @@ export function RegisterPanel({ account, onRegistered }: RegisterPanelProps) {
         <div>
           <label className={labelClass}>Repository URL</label>
           <input className={inputClass} value={repo} onChange={e => setRepo(e.target.value)}
-            placeholder="https://github.com/org/repo" required disabled={busy} />
+            placeholder="https://github.com/owner/repo (GitHub only)" pattern="https://github\.com/[A-Za-z0-9][A-Za-z0-9\-]{0,38}/[A-Za-z0-9_.\-]{1,100}" title="GitHub repository URL: https://github.com/owner/repo (no .git, trailing slash or extra path)" maxLength={200} required disabled={busy} />
         </div>
 
         <button

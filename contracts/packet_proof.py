@@ -1,34 +1,44 @@
 # { "Depends": "py-genlayer:1jb45aa8ynh2a9c9xn3b7qqh8sm5q93hwfp7jqmwsfhh8jpz09h6" }
 """
-PacketProof — on-chain package release integrity attestation protocol.
+PacketProof — on-chain release-metadata attestation for npm and PyPI packages.
 
 CONCEPT
 -------
 Before a package is published, the maintainer locks a release intent on-chain:
 package name, registry ecosystem (npm/pypi), version, and the expected source
-commit SHA from the canonical VCS host. After publication the attestation is
-submitted for verification. The contract independently fetches the package
-registry's own published metadata (no caller-supplied URLs — the fetch target
-is deterministically derived from the locked identifiers), verifies the
-published dist-hash commitment is present and consistent, uses GenLayer
-multi-validator consensus to semantically judge whether the changelog/release
-notes honestly describe the changes in the locked commit, then deterministically
-derives one of four states: UNVERIFIED → INCONCLUSIVE → VERIFIED → CERTIFIED.
+commit SHA on github.com. After publication the maintainer submits a snapshot
+of the release. The contract independently fetches the registry's own record
+and the commit's raw patch (no caller-supplied URLs; both fetch targets are
+derived from the locked identifiers), and validators independently judge three
+rules: changelog_present, changelog_honest and version_consistent. The verdict
+routes deterministically to VERIFIED, INCONCLUSIVE or BLOCKED.
 
-WHY MULTI-VALIDATOR CONSENSUS IS NECESSARY
--------------------------------------------
-A single-party fetch cannot catch a maintainer who publishes package bytes that
-differ from what is claimed in the changelog. Multiple independent validators
-each fetching the registry record and the source commit, then independently
-judging whether the changelog is an honest representation of those changes,
-means no single actor can fake a CERTIFIED state. A supply-chain attacker who
-controls the package registry response on one validator cannot control it on
-all validators simultaneously.
+WHAT A CERTIFIED RELEASE PROVES (and what it does not)
+------------------------------------------------------
+Proves, at the time of attestation:
+  1. the registry record for the locked name+version echoes that name+version;
+  2. every dist hash the maintainer committed to appears in that registry record;
+  3. the GitHub patch for the locked commit SHA was fetched and echoes that SHA;
+  4. validators independently agreed the changelog is present, honestly describes
+     that patch, and that the version bump is consistent with it;
+  5. no admitted challenge, re-judged by the validators with the challenger's
+     evidence in the prompt, overturned the result before the review window closed.
+Does NOT prove: that the published package bytes were built from the commit.
+The contract never downloads or hashes the tarball/wheel and does not compare
+source to artifact; the dist hashes are matched against the registry's own
+metadata, not recomputed. Commits that reach the contract only through a fork of
+the named repository are not distinguished from the repository's own. Patches
+longer than MAX_DIFF_CHARS cannot be judged whole and route to INCONCLUSIVE.
+
+WHY MULTI-VALIDATOR CONSENSUS
+-----------------------------
+The changelog-versus-patch judgment is a subjective call a maintainer benefits
+from getting wrong. Each validator re-fetches the registry record and the patch
+itself and re-derives every per-rule status; agreement is exact on the statuses
+and on every fetched-evidence digest.
 
 SHAPE: Single-party attestation with bounded challenge window.
-No staking. The consequence is a permanent public attestation record —
-downstream consumers can read CERTIFIED status and trust it was independently
-verified by multiple GenLayer validators.
+No staking. The consequence is a permanent public attestation record.
 
 STATE MACHINE
 -------------
@@ -69,6 +79,23 @@ All leader/validator pairs follow sections 3–6 of the GenLayer Agent Playbook:
      _verify_challenge_evidence is inlined into open_challenge (Bug B fix).
   7. Per-record arrays stored as delimiter-joined str.
 
+BUG FIX RECORD (steward review, Oct 2026)
+-----------------------------------------
+S1: reassess_challenge re-ran attestation without the admitted challenge
+    evidence in the prompt, so a challenge could never change a verdict. The
+    evidence text is now in the prompt, and a fourth rule
+    (challenge_evidence_addressed) is added for CHALLENGE runs so validators
+    must commit to a status on it; INCONSISTENT routes to BLOCKED.
+S2: an unavailable commit fetch was passed to the model as a marker string and
+    could still produce VERIFIED; the HTML commit-page fallback could be judged as
+    a diff. Now: raw .patch only, must echo the locked SHA, must fit
+    MAX_DIFF_CHARS; otherwise INCONCLUSIVE (evidence_code COMMIT_*), never VERIFIED.
+S3: claims narrowed to what the contract proves (see above); source-to-artifact
+    verification is not implemented. All committed dist hashes (not any one) must
+    match the registry record.
+S4: repository_url restricted to github.com/<owner>/<repo>, the one provider
+    whose commit endpoint is implemented. GitLab and Bitbucket are rejected.
+
 BUG FIX RECORD (second audit)
 -----------------------------
 E1: gl.storage.copy_to_memory() was called on plain dicts parsed from JSON
@@ -108,6 +135,7 @@ MAX_PACKAGES   = 200
 MAX_RULES      = 8
 MAX_TEXT       = 8000
 MAX_BODY_BYTES = 64000
+MAX_DIFF_CHARS = 12000           # commit patches larger than this cannot be judged whole -> INCONCLUSIVE
 MAX_EVENTS     = 300
 MAX_PAGE       = 50
 MAX_CHALLENGES_PER_GENERATION = 3
@@ -135,6 +163,9 @@ HEX40  = re.compile(r"^[0-9a-f]{40}$", re.I)
 HEX64  = re.compile(r"^[0-9a-f]{64}$", re.I)
 SEMVER = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+([.\-+][A-Za-z0-9.\-+]*)?$")
 PKG_NAME_RE = re.compile(r"^[@A-Za-z0-9][A-Za-z0-9.\-_/]{0,213}$")
+# Only github.com is supported: the commit evidence is fetched from GitHub's own
+# `/commit/<sha>.patch` endpoint, so any other host is rejected at registration.
+GITHUB_REPO_RE = re.compile(r"^https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9_.\-]{1,100}$")
 
 _DEFAULT_RULES = [
     {
@@ -153,6 +184,15 @@ _DEFAULT_RULES = [
         "allowed_changes": "Bumping to a higher category than the change requires is acceptable; bumping to a lower category when breaking changes exist is not."
     },
 ]
+
+# Extra rule applied only when re-running attestation for an admitted challenge.
+# The challenger's evidence is placed in the prompt and this rule forces the
+# validators to commit to a status on it; INCONSISTENT routes to BLOCKED.
+_CHALLENGE_RULE = {
+    "id": "challenge_evidence_addressed",
+    "question": "The admitted challenge evidence claims a discrepancy in this release. Checked against the registry record and the commit patch, is the claimed discrepancy real? CONSISTENT: the release holds up and the evidence does not show a real discrepancy. INCONSISTENT: the registry record or commit patch corroborates the evidence and shows a real discrepancy. CONFLICTING or MISSING: the evidence cannot be checked against what was fetched.",
+    "allowed_changes": "Evidence that is unrelated to, or contradicted by, the fetched registry record and commit patch does not count against the release."
+}
 
 _DELIMITER = "\x1f"
 
@@ -277,11 +317,11 @@ def _valid_ecosystem(v) -> bool:
 
 
 def _valid_repo_url(v) -> bool:
-    return isinstance(v, str) and len(v) <= 1024 and (
-        v.startswith("https://github.com/")
-        or v.startswith("https://gitlab.com/")
-        or v.startswith("https://bitbucket.org/")
-    )
+    """github.com/<owner>/<repo> only: no .git suffix, trailing slash, query, fragment or extra path."""
+    if not isinstance(v, str) or len(v) > 200 or not GITHUB_REPO_RE.fullmatch(v):
+        return False
+    repo = v.rsplit("/", 1)[1]
+    return repo not in (".", "..") and not repo.endswith(".git")
 
 
 def _pkg_key(pkg_name, ecosystem, version) -> str:
@@ -313,10 +353,19 @@ def _registry_url(ecosystem, pkg_name, version) -> str:
     return ""
 
 
-def _commit_urls(repo_url, commit_sha):
-    """Return (raw_diff_url, html_fallback_url). Bug 9 fix: .diff suffix."""
-    base = repo_url.rstrip("/")
-    return f"{base}/commit/{commit_sha}.diff", f"{base}/commit/{commit_sha}"
+def _commit_patch_url(repo_url, commit_sha) -> str:
+    """GitHub serves the raw git-format patch for a commit at <repo>/commit/<sha>.patch.
+    The plain commit page is a JS-rendered HTML shell and is never used as evidence."""
+    return f"{repo_url.rstrip('/')}/commit/{commit_sha}.patch"
+
+
+def _patch_binds_commit(text, commit_sha) -> bool:
+    """Rule 0.8 echo check: a git-format patch begins `From <full-sha> <date>`.
+    The fetched record must name the locked commit before it can influence a verdict."""
+    if not isinstance(text, str):
+        return False
+    parts = text.split("\n", 1)[0].strip().split(" ")
+    return len(parts) >= 2 and parts[0] == "From" and parts[1].lower() == commit_sha.lower()
 
 
 def _findings_valid(findings, rules) -> bool:
@@ -377,7 +426,7 @@ def _payload_matches(p, v, ignored=()) -> bool:
     return True
 
 
-def _derive_attestation(findings, evidence_available, registry_match, dist_hash_match) -> str:
+def _derive_attestation(findings, evidence_available, registry_match, dist_hash_match, commit_evidence_available) -> str:
     """Deterministic verdict derivation from per-rule findings."""
     statuses = [x["status"] for x in findings]
     if any(s in BLOCKING for s in statuses):
@@ -386,6 +435,7 @@ def _derive_attestation(findings, evidence_available, registry_match, dist_hash_
         not evidence_available
         or not registry_match
         or not dist_hash_match
+        or not commit_evidence_available
         or any(s in UNCERTAIN for s in statuses)
     ):
         return "INCONCLUSIVE"
@@ -398,6 +448,7 @@ def _attestation_digest(result) -> str:
     fields = (
         "generation", "package_name", "ecosystem", "version", "commit_sha",
         "registry_url", "registry_match", "dist_hash_match", "evidence_available",
+        "commit_evidence_available", "commit_patch_digest", "evidence_code",
         "registry_record_digest", "locked_snapshot_digest",
         "findings", "route_result", "attempt", "attempt_kind", "challenge"
     )
@@ -768,14 +819,20 @@ class PacketProof(gl.Contract):
         snap_mem = json.loads(_dumps(snap))
 
         registry_url = _registry_url(p_mem["ecosystem"], p_mem["package_name"], p_mem["version"])
-        raw_url, fallback_url = _commit_urls(p_mem["repository_url"], p_mem["commit_sha"])
+        patch_url = _commit_patch_url(p_mem["repository_url"], p_mem["commit_sha"])
 
         challenge = {}
+        challenge_text = ""
         if isinstance(challenge_context, dict) and challenge_context:
             challenge = {
                 "id": challenge_context.get("id", 0),
                 "evidence_digest": challenge_context.get("evidence_digest", "")
             }
+            challenge_text = _sanitize(challenge_context.get("evidence_text", ""), MAX_TEXT)
+        if kind == "CHALLENGE" and (not challenge or not challenge_text):
+            raise gl.vm.UserError("challenge evidence missing")
+        # A challenge adds one rule, so the validators must commit to a status on it.
+        rules = list(_DEFAULT_RULES) + ([_CHALLENGE_RULE] if kind == "CHALLENGE" else [])
 
         def leader_fn():
             # Bug A fix: fetch helpers nested, not at module level
@@ -815,23 +872,34 @@ class PacketProof(gl.Contract):
                 except Exception:
                     return "[fetch failed: unreachable or errored]"
 
-            reg_data, reg_err = _do_fetch_json(registry_url)
-            if reg_data is None:
+            def _out(code, route, evidence_available=True, registry_match=False,
+                     dist_hash_match=False, commit_ok=False, reg_digest="",
+                     patch_digest="", findings=None, explanations=None):
                 return {
-                    "ok": False, "evidence_available": False,
+                    "ok": code == "OK",
+                    "evidence_code": code,
+                    "evidence_available": evidence_available,
+                    "commit_evidence_available": commit_ok,
+                    "commit_patch_digest": patch_digest,
                     "package_name": p_mem["package_name"],
                     "ecosystem": p_mem["ecosystem"],
                     "version": p_mem["version"],
                     "commit_sha": p_mem["commit_sha"],
                     "registry_url": registry_url,
-                    "registry_match": False, "dist_hash_match": False,
-                    "registry_record_digest": "",
+                    "registry_match": registry_match,
+                    "dist_hash_match": dist_hash_match,
+                    "registry_record_digest": reg_digest,
                     "locked_snapshot_digest": locked_snapshot_digest,
-                    "findings": [], "leader_explanations": [],
-                    "route_result": "INCONCLUSIVE",
+                    "findings": findings if findings is not None else [],
+                    "leader_explanations": explanations if explanations is not None else [],
+                    "route_result": route,
                     "challenge": challenge,
                     "attempt": 0, "attempt_kind": kind
                 }
+
+            reg_data, reg_err = _do_fetch_json(registry_url)
+            if reg_data is None:
+                return _out("REGISTRY_UNAVAILABLE", "INCONCLUSIVE", evidence_available=False)
 
             registry_record_digest = _digest(reg_data)
 
@@ -842,7 +910,8 @@ class PacketProof(gl.Contract):
                 rname = reg_data.get("name", "")
                 rver  = reg_data.get("version", "")
                 registry_match = (
-                    rname.lower() == p_mem["package_name"].lower()
+                    isinstance(rname, str) and isinstance(rver, str)
+                    and rname.lower() == p_mem["package_name"].lower()
                     and rver == p_mem["version"]
                 )
                 dist_obj = reg_data.get("dist", {}) or {}
@@ -852,69 +921,55 @@ class PacketProof(gl.Contract):
                             dist_hashes_in_record.append(f"{k}:{dv}")
                             dist_hashes_in_record.append(dv)
             elif p_mem["ecosystem"] == ECOSYSTEM_PYPI:
-                info = reg_data.get("info", {}) if isinstance(reg_data, dict) else {}
+                info = reg_data.get("info", {}) if isinstance(reg_data.get("info"), dict) else {}
                 rname = info.get("name", "")
                 rver  = info.get("version", "")
                 registry_match = (
-                    rname.lower() == p_mem["package_name"].lower()
+                    isinstance(rname, str) and isinstance(rver, str)
+                    and rname.lower() == p_mem["package_name"].lower()
                     and rver == p_mem["version"]
                 )
                 urls = reg_data.get("urls", []) if isinstance(reg_data.get("urls"), list) else []
                 for url_entry in urls[:8]:
                     if isinstance(url_entry, dict):
                         digests = url_entry.get("digests", {}) or {}
-                        for k, dv in digests.items():
-                            if isinstance(dv, str) and len(dv) < 200:
-                                dist_hashes_in_record.append(f"{k}:{dv}")
-                                dist_hashes_in_record.append(dv)
+                        if isinstance(digests, dict):
+                            for k, dv in digests.items():
+                                if isinstance(dv, str) and len(dv) < 200:
+                                    dist_hashes_in_record.append(f"{k}:{dv}")
+                                    dist_hashes_in_record.append(dv)
 
             if not registry_match:
-                return {
-                    "ok": False, "evidence_available": True,
-                    "package_name": p_mem["package_name"],
-                    "ecosystem": p_mem["ecosystem"],
-                    "version": p_mem["version"],
-                    "commit_sha": p_mem["commit_sha"],
-                    "registry_url": registry_url,
-                    "registry_match": False, "dist_hash_match": False,
-                    "registry_record_digest": registry_record_digest,
-                    "locked_snapshot_digest": locked_snapshot_digest,
-                    "findings": [], "leader_explanations": [],
-                    "route_result": "INCONCLUSIVE",
-                    "challenge": challenge,
-                    "attempt": 0, "attempt_kind": kind
-                }
+                return _out("REGISTRY_MISMATCH", "INCONCLUSIVE", reg_digest=registry_record_digest)
 
+            # Every hash the maintainer committed to must appear in the registry record.
             snapshot_hashes = snap_mem.get("dist_hashes", []) or []
-            dist_hash_match = bool(snapshot_hashes) and bool(dist_hashes_in_record) and any(
-                h in dist_hashes_in_record for h in snapshot_hashes
+            dist_hash_match = (
+                bool(snapshot_hashes) and bool(dist_hashes_in_record)
+                and all(h in dist_hashes_in_record for h in snapshot_hashes)
             )
-
             if not dist_hash_match:
-                return {
-                    "ok": False, "evidence_available": True,
-                    "package_name": p_mem["package_name"],
-                    "ecosystem": p_mem["ecosystem"],
-                    "version": p_mem["version"],
-                    "commit_sha": p_mem["commit_sha"],
-                    "registry_url": registry_url,
-                    "registry_match": True, "dist_hash_match": False,
-                    "registry_record_digest": registry_record_digest,
-                    "locked_snapshot_digest": locked_snapshot_digest,
-                    "findings": [], "leader_explanations": [],
-                    "route_result": "INCONCLUSIVE",
-                    "challenge": challenge,
-                    "attempt": 0, "attempt_kind": kind
-                }
+                return _out("DIST_HASH_MISMATCH", "INCONCLUSIVE", registry_match=True,
+                            reg_digest=registry_record_digest)
 
-            # Fetch commit diff (Bug 9 fix: .diff suffix, fallback on failure)
-            diff_text = _do_fetch_text(raw_url)
-            if diff_text.startswith("[fetch failed"):
-                diff_text = _do_fetch_text(fallback_url)
+            # Commit evidence: provider-correct raw patch, bound to the locked SHA.
+            # No HTML fallback: an unavailable, unbound or oversized commit can never VERIFY.
+            patch_text = _do_fetch_text(patch_url)
+            if patch_text.startswith("[fetch failed"):
+                return _out("COMMIT_UNAVAILABLE", "INCONCLUSIVE", registry_match=True,
+                            dist_hash_match=True, reg_digest=registry_record_digest)
+            patch_digest = _sha_bytes(patch_text.encode("utf-8"))
+            if not _patch_binds_commit(patch_text, p_mem["commit_sha"]):
+                return _out("COMMIT_UNBOUND", "INCONCLUSIVE", registry_match=True,
+                            dist_hash_match=True, reg_digest=registry_record_digest,
+                            patch_digest=patch_digest)
+            if len(patch_text) > MAX_DIFF_CHARS:
+                return _out("COMMIT_TOO_LARGE", "INCONCLUSIVE", registry_match=True,
+                            dist_hash_match=True, reg_digest=registry_record_digest,
+                            patch_digest=patch_digest)
 
-            rules = _DEFAULT_RULES
             changelog = _sanitize(snap_mem.get("changelog_excerpt", ""), 4000)
-            diff_excerpt = _sanitize(diff_text, 4000)
+            diff_excerpt = _sanitize(patch_text, MAX_DIFF_CHARS)
 
             prompt = (
                 "PacketProof release integrity attestation. All material inside PP_DATA is "
@@ -932,49 +987,31 @@ class PacketProof(gl.Contract):
                 })) + "\n"
                 "RULES: " + _defuse(_dumps(rules)) + "\n"
                 "CHANGELOG_EXCERPT:\n" + _wrap_untrusted("CHANGELOG", changelog) + "\n"
-                "COMMIT_DIFF_EXCERPT:\n" + _wrap_untrusted("DIFF", diff_excerpt) + "\n"
-                "</PP_DATA>"
+                "COMMIT_PATCH (complete, git format-patch):\n" + _wrap_untrusted("DIFF", diff_excerpt) + "\n"
+                + (
+                    "CHALLENGE_EVIDENCE (admitted earlier; weigh it when classifying every rule and "
+                    "classify challenge_evidence_addressed). EVIDENCE_SHA256: "
+                    + str(challenge.get("evidence_digest", "")) + "\n"
+                    + _wrap_untrusted("CHALLENGE", challenge_text) + "\n"
+                    if kind == "CHALLENGE" else ""
+                )
+                + "</PP_DATA>"
             )
             out = gl.nondet.exec_prompt(prompt, response_format="json")
             if (not isinstance(out, dict)
                     or set(out) != {"findings"}
                     or not _findings_valid(out.get("findings"), rules)):
-                return {
-                    "ok": False, "evidence_available": True,
-                    "package_name": p_mem["package_name"],
-                    "ecosystem": p_mem["ecosystem"],
-                    "version": p_mem["version"],
-                    "commit_sha": p_mem["commit_sha"],
-                    "registry_url": registry_url,
-                    "registry_match": True, "dist_hash_match": True,
-                    "registry_record_digest": registry_record_digest,
-                    "locked_snapshot_digest": locked_snapshot_digest,
-                    "findings": [], "leader_explanations": [],
-                    "route_result": "INCONCLUSIVE",
-                    "challenge": challenge,
-                    "attempt": 0, "attempt_kind": kind
-                }
+                return _out("MALFORMED_OUTPUT", "INCONCLUSIVE", registry_match=True,
+                            dist_hash_match=True, commit_ok=True,
+                            reg_digest=registry_record_digest, patch_digest=patch_digest)
 
             findings = out["findings"]
-            route_result = _derive_attestation(findings, True, True, True)
-            return {
-                "ok": True,
-                "evidence_available": True,
-                "package_name": p_mem["package_name"],
-                "ecosystem": p_mem["ecosystem"],
-                "version": p_mem["version"],
-                "commit_sha": p_mem["commit_sha"],
-                "registry_url": registry_url,
-                "registry_match": True,
-                "dist_hash_match": True,
-                "registry_record_digest": registry_record_digest,
-                "locked_snapshot_digest": locked_snapshot_digest,
-                "findings": _consensus_findings(findings),
-                "leader_explanations": _leader_explanations(findings),
-                "route_result": route_result,
-                "challenge": challenge,
-                "attempt": 0, "attempt_kind": kind
-            }
+            route_result = _derive_attestation(findings, True, True, True, True)
+            return _out("OK", route_result, registry_match=True, dist_hash_match=True,
+                        commit_ok=True, reg_digest=registry_record_digest,
+                        patch_digest=patch_digest,
+                        findings=_consensus_findings(findings),
+                        explanations=_leader_explanations(findings))
 
         def validator_fn(leaders_res) -> bool:
             if not isinstance(leaders_res, gl.vm.Return):
@@ -990,7 +1027,9 @@ class PacketProof(gl.Contract):
                 return False
             if not _payload_matches(lp, v, ("leader_explanations",)):
                 return False
-            return _leader_explanations_valid(lp.get("leader_explanations"), _DEFAULT_RULES)
+            if not lp.get("findings"):
+                return lp.get("leader_explanations") == []
+            return _leader_explanations_valid(lp.get("leader_explanations"), rules)
 
         result = gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
@@ -1225,6 +1264,8 @@ class PacketProof(gl.Contract):
                 or not a.get("registry_match")
                 or not a.get("dist_hash_match")
                 or not a.get("evidence_available")
+                or not a.get("commit_evidence_available")
+                or not a.get("commit_patch_digest")
                 or not a.get("findings")
                 or any(item.get("status") not in PASSING for item in a["findings"])):
             raise gl.vm.UserError("certification evidence incomplete")
@@ -1239,6 +1280,7 @@ class PacketProof(gl.Contract):
             "snapshot_digest": p["snapshot_digest"],
             "attestation_digest": a["attestation_digest"],
             "registry_record_digest": a.get("registry_record_digest", ""),
+            "commit_patch_digest": a["commit_patch_digest"],
             "findings": a["findings"]
         }
         evidence_root = _digest(evidence_set)
@@ -1293,7 +1335,9 @@ class PacketProof(gl.Contract):
             "max_ordinary_attempts": MAX_ORDINARY_ATTEMPTS,
             "max_total_attempts": MAX_TOTAL_ATTEMPTS,
             "max_challenges_per_generation": MAX_CHALLENGES_PER_GENERATION,
-            "snapshot_schema": "packetproof.snapshot.v1"
+            "snapshot_schema": "packetproof.snapshot.v1",
+            "supported_repository_hosts": ["github.com"],
+            "max_commit_patch_chars": MAX_DIFF_CHARS
         })
 
     @gl.public.view

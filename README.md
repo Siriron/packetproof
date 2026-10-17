@@ -13,7 +13,7 @@
 ![Ecosystems](https://img.shields.io/badge/ecosystems-npm%20%C2%B7%20pypi-cb3837?style=flat-square)
 ![Staking](https://img.shields.io/badge/staking-none-lightgrey?style=flat-square)
 ![Stack](https://img.shields.io/badge/stack-React%20%C2%B7%20TypeScript%20%C2%B7%20Vite-0ea5e9?style=flat-square)
-![Tests](https://img.shields.io/badge/direct--mode%20tests-82%20passing-brightgreen?style=flat-square)
+![Tests](https://img.shields.io/badge/direct--mode%20tests-118%20passing-brightgreen?style=flat-square)
 
 <br />
 
@@ -41,9 +41,11 @@
 
 ### The Supply-Chain Integrity Problem
 
-The npm and PyPI ecosystems ship billions of package installs per month. A maintainer who publishes a release with a misleading changelog, or whose release bytes differ from the committed source, can introduce vulnerabilities with no on-chain record of the discrepancy. No existing protocol locks a cryptographic pre-commitment to a release intent before publication, then independently verifies the published artifact against that commitment using multiple validators who cannot collude.
+The npm and PyPI ecosystems ship billions of package installs per month. A maintainer who publishes a release with a misleading changelog, can publish a release whose registry metadata or changelog does not match the commit it claims to come from, with no on-chain record of the discrepancy. PacketProof locks a pre-commitment to a release intent before publication, then has multiple validators independently check the registry's own record and the commit patch against it.
 
-PacketProof fills that gap. Before publishing, the maintainer locks four fields on-chain: package name, registry ecosystem, version, and source commit SHA. After publication, the contract independently derives the registry URL from those locked identifiers (the caller never supplies a URL), fetches the live registry record across multiple GenLayer validators, verifies the dist-hash commitment, and uses consensus to judge whether the changelog honestly describes the changes in the commit diff. The result is a permanent, tamper-evident attestation record any downstream tool can read.
+PacketProof fills that gap. Before publishing, the maintainer locks four fields on-chain: package name, registry ecosystem, version, and source commit SHA. After publication, the contract independently derives the registry URL from those locked identifiers (the caller never supplies a URL), fetches the live registry record across multiple GenLayer validators, checks that every committed dist hash appears in that registry record, and uses consensus to judge whether the changelog honestly describes the commit patch. The result is a permanent attestation record any downstream tool can read.
+
+**What a certified release does and does not prove.** It proves the registry record echoes the locked name and version, the committed dist hashes appear in it, the GitHub patch for the locked commit was fetched and echoes that SHA, and validators agreed the changelog is present and honest against that patch and the version bump is consistent. It does **not** prove the published package bytes were built from the commit: the contract never downloads or hashes the tarball or wheel, and dist hashes are matched against registry metadata, not recomputed. Only `github.com/<owner>/<repo>` repositories are supported, and patches longer than 12,000 characters are `INCONCLUSIVE`.
 
 > *A supply-chain attacker who controls the registry response on one validator cannot control it on all validators simultaneously.*
 
@@ -80,12 +82,12 @@ _registry_url("npm", "mylib", "1.2.3")
 _registry_url("pypi", "requests", "2.31.0")
 # -> https://pypi.org/pypi/requests/2.31.0/json
 
-# commit diff: locked repository_url + commit_sha
-_commit_urls("https://github.com/myorg/mylib", "abc123...")
-# -> (.../commit/abc123....diff, .../commit/abc123...)
+# commit patch: locked github.com repository_url + commit_sha
+_commit_patch_url("https://github.com/myorg/mylib", "abc123...")
+# -> https://github.com/myorg/mylib/commit/abc123....patch
 ```
 
-**Rule 0.8 (echo check).** After fetching the registry record, the contract verifies the record refers back to the locked identifiers before it influences the verdict. A response that returns a different package's metadata is rejected.
+**Rule 0.8 (echo check).** After fetching the registry record, the contract verifies the record refers back to the locked identifiers before it influences the verdict. The commit patch must begin `From <locked sha>`; a patch for another commit, an HTML page, or a failed or oversized fetch yields `INCONCLUSIVE`, never `VERIFIED`.
 
 ### Four Nondet Call Sites
 
@@ -97,7 +99,8 @@ _commit_urls("https://github.com/myorg/mylib", "abc123...")
 
 - Fetches live registry endpoint
 - Performs Rule 0.8 echo check
-- Fetches commit diff (raw + fallback)
+- Fetches the raw `.patch` for the locked commit (no HTML fallback)
+- Adds the admitted challenge evidence to the prompt on reassessment
 - Calls `exec_prompt` for semantic judgment
 - Returns full payload dict with all decision fields
 
@@ -151,7 +154,7 @@ Any `INCONSISTENT` gives `BLOCKED`. Any `MISSING`, `UNREADABLE` or `CONFLICTING`
 
 ## Audit & Bug Fixes
 
-The contract was audited twice against the GenLayer Agent Playbook. The first audit found four bugs (A to D); a second audit found seven more (E1 to E7). All are fixed.
+The contract was audited twice against the GenLayer Agent Playbook, then corrected after steward review. The first audit found four bugs (A to D); a second audit found seven more (E1 to E7). All are fixed.
 
 ### First audit (Oct 2026)
 
@@ -161,6 +164,17 @@ The contract was audited twice against the GenLayer Agent Playbook. The first au
 | **B** | `_verify_challenge_evidence` was a plain instance method calling `gl.vm.run_nondet_unsafe()` via `self.`. The method containing `run_nondet_unsafe` must be the `@gl.public.write` body itself. | Inlined entirely into `open_challenge`. The `leader_fn`/`validator_fn` closures have zero `self.` references. |
 | **C** | In `_run_attestation`, a ternary in the generation assignment was immediately overwritten by the following `if kind == "ORDINARY"` block, making it dead code. | Replaced with a single clean `if`/`else` branch. |
 | **D** | All 10 view methods were annotated `-> dict` or `-> list` and returned those types directly. All views must return `str` via `json.dumps()`. | Every view returns `_dumps(...)` and is annotated `-> str`. |
+
+### Steward review (Oct 2026)
+
+| # | Defect | Fix |
+|---|---|---|
+| **S1** | `reassess_challenge` re-ran attestation without the admitted challenge evidence, so a challenge could never affect the validators' decision. | The evidence text is in the prompt, and a fourth rule, `challenge_evidence_addressed`, makes validators commit to a status on it. `INCONSISTENT` gives `BLOCKED`; uncertain gives `INCONCLUSIVE`. |
+| **S2** | An unavailable commit fetch reached the model as a marker string and could still yield `VERIFIED`; an HTML fallback page could be judged as a diff. | Raw `.patch` only, must echo the locked SHA and fit 12,000 characters; otherwise `INCONCLUSIVE` with `evidence_code` `COMMIT_UNAVAILABLE`, `COMMIT_UNBOUND` or `COMMIT_TOO_LARGE`. `certify` also requires bound commit evidence. |
+| **S3** | Claims implied source-to-artifact verification. | Claims narrowed to what the contract proves (above). Every committed dist hash, not any one, must appear in the registry record. |
+| **S4** | Repository input accepted GitLab and Bitbucket, whose commit endpoints were not implemented. | `repository_url` is restricted to `https://github.com/<owner>/<repo>`. |
+
+New tests cover each path, including a planted-bug check: dropping the challenge text from the prompt, or letting an unavailable patch through, fails the suite.
 
 ### Second audit
 
@@ -292,7 +306,7 @@ npm run build
 packetproof/
 ├── contracts/
 │   └── packet_proof.py       GenLayer intelligent contract
-├── tests/direct/             direct-mode tests (82)
+├── tests/direct/             direct-mode tests (118)
 ├── docs/                     architecture, contracts, deployment, frontend
 ├── src/                      React/TypeScript frontend
 │   ├── App.tsx

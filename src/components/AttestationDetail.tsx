@@ -45,6 +45,12 @@ export function AttestationDetail({ attestation: a }: AttestationDetailProps) {
             {a.dist_hash_match ? "matched" : "mismatch"}
           </span>
         </div>
+        <div className="flex justify-between">
+          <span className="text-slate-600">commit patch</span>
+          <span className={a.commit_evidence_available ? "text-emerald-300" : "text-red-400"}>
+            {a.commit_evidence_available ? "fetched, SHA-bound" : (a.evidence_code ?? "unavailable")}
+          </span>
+        </div>
       </div>
 
       {Array.isArray(a.findings) && a.findings.length > 0 && (

@@ -6,7 +6,9 @@ PacketProof is an on-chain package release integrity attestation protocol built 
 
 ## Why multi-validator consensus is necessary
 
-A single-party fetch cannot prevent a maintainer who publishes package bytes that differ from what is claimed in the changelog. Multiple independent validators each fetching the same registry record and commit, then independently judging the changelog, means no single actor can fake a `CERTIFIED` state. A supply-chain attacker who manipulates the registry response on one validator cannot control all validators simultaneously.
+A single-party fetch cannot settle whether a changelog honestly describes a commit. Multiple independent validators each fetching the same registry record and commit patch, then independently judging the changelog, means no single actor can fake a `CERTIFIED` state.
+
+Scope: PacketProof does not download or hash the published package bytes and does not prove they were built from the commit. It attests registry-metadata consistency (name, version, committed dist hashes), the commit patch bound to the locked SHA, and the changelog judgment.
 
 ## State machine
 
@@ -42,8 +44,10 @@ pypi: https://pypi.org/pypi/{name}/{version}/json
 
 Commit fetch URL is derived from the locked repository URL + commit SHA:
 ```
-https://github.com/{org}/{repo}/commit/{sha}.diff
+https://github.com/{org}/{repo}/commit/{sha}.patch
 ```
+
+Only `github.com` repositories are accepted. The patch must begin `From <locked sha>`, must be at most 12,000 characters, and an unavailable, unbound or oversized patch gives `INCONCLUSIVE` (`evidence_code` `COMMIT_UNAVAILABLE`, `COMMIT_UNBOUND`, `COMMIT_TOO_LARGE`), never `VERIFIED`. Every dist hash the maintainer committed to must appear in the registry record.
 
 The fetched registry record must echo back the claimed package name and version before it influences the verdict (echo-check rule). A record that does not contain the expected identifiers produces INCONCLUSIVE rather than BLOCKED.
 
@@ -71,7 +75,7 @@ Aggregate derivation (deterministic, no LLM):
 - Irrelevant evidence is rejected without consuming an attempt.
 - Maximum 3 admitted challenges per generation.
 - An admitted challenge blocks certification until the owner reassesses with `reassess_challenge`.
-- Reassessment runs a fresh consensus round incorporating the challenge evidence.
+- Reassessment runs a fresh consensus round with the admitted challenge evidence in the prompt. A fourth rule, `challenge_evidence_addressed`, is judged alongside the three above: `INCONSISTENT` gives `BLOCKED`, `MISSING`/`UNREADABLE`/`CONFLICTING` gives `INCONCLUSIVE`, `CONSISTENT` leaves the release `VERIFIED`.
 
 ## Generation tracking
 

@@ -138,10 +138,17 @@ def _mock_registry(vm, record=None, status=200):
     )
 
 
-def _mock_diff(vm, body="+ added helper\n- removed deprecated fn\n", status=200):
+def _patch_body(sha=COMMIT_SHA, body="+ added helper\n- removed deprecated fn\n"):
+    """A git format-patch body, as served by GitHub at /commit/<sha>.patch."""
+    return f"From {sha} Mon Sep 17 00:00:00 2001\nSubject: [PATCH] release 1.2.3\n\n---\n{body}"
+
+
+def _mock_diff(vm, body=None, status=200):
+    """Mock GitHub's raw .patch endpoint. The plain commit page is mocked as an HTML shell
+    that must never be used as evidence."""
     vm.mock_web(
-        r".*/commit/[a-f0-9]+\.diff.*",
-        {"status": status, "body": body},
+        r".*/commit/[a-f0-9]+\.patch.*",
+        {"status": status, "body": _patch_body() if body is None else body},
     )
     vm.mock_web(
         r".*/commit/[a-f0-9]+$",
@@ -156,15 +163,27 @@ def _mock_llm_faithful(vm, faithful=True):
     )
 
 
-def _mock_llm_attest(vm, statuses=("PRESERVED", "CONSISTENT", "CONSISTENT")):
-    rule_ids = ["changelog_present", "changelog_honest", "version_consistent"]
-    findings = [
-        {"rule_id": rid, "status": s, "reason": f"{rid} ok"}
-        for rid, s in zip(rule_ids, statuses)
-    ]
+RULE_IDS = ["changelog_present", "changelog_honest", "version_consistent"]
+CHALLENGE_RULE = "challenge_evidence_addressed"
+
+
+def _findings(statuses, extra=None):
+    rows = [{"rule_id": rid, "status": st, "reason": f"{rid} ok"} for rid, st in zip(RULE_IDS, statuses)]
+    if extra is not None:
+        rows.append({"rule_id": CHALLENGE_RULE, "status": extra, "reason": "challenge evidence assessed"})
+    return json.dumps({"findings": rows})
+
+
+def _mock_llm_attest(vm, statuses=("PRESERVED", "CONSISTENT", "CONSISTENT"), challenge_status="CONSISTENT"):
+    """Ordinary runs get 3 findings. Runs whose prompt carries CHALLENGE_EVIDENCE get 4
+    (the registered-first mock wins, so the challenge variant goes first)."""
     vm.mock_llm(
-        r".*PacketProof release integrity attestation.*",
-        json.dumps({"findings": findings}),
+        r"(?s).*PacketProof release integrity attestation.*CHALLENGE_EVIDENCE.*",
+        _findings(statuses, challenge_status),
+    )
+    vm.mock_llm(
+        r"(?s).*PacketProof release integrity attestation.*",
+        _findings(statuses),
     )
 
 
@@ -247,7 +266,16 @@ def test_invalid_commit_sha(direct_vm, direct_deploy, sha):
         c.register_package(PKG_NAME, ECOSYSTEM_NPM, VERSION, sha, REPO_URL, REVIEW_WINDOW)
 
 
-@pytest.mark.parametrize("url", ["http://github.com/x/y", "https://notgithub.com/x/y", "ftp://github.com/x/y"])
+@pytest.mark.parametrize("url", [
+    "http://github.com/x/y", "https://notgithub.com/x/y", "ftp://github.com/x/y",
+    # providers whose commit endpoint is not implemented
+    "https://gitlab.com/x/y", "https://bitbucket.org/x/y",
+    # malformed github inputs
+    "https://github.com/x", "https://github.com/x/y/", "https://github.com/x/y.git",
+    "https://github.com/x/y/tree/main", "https://github.com/x/y?a=b", "https://github.com/x/y#frag",
+    "https://github.com/x/..", "https://github.com/-x/y", "https://github.com.evil.io/x/y",
+    "https://github.com/x/y z",
+])
 def test_invalid_repo_url(direct_vm, direct_deploy, url):
     c = direct_deploy(CONTRACT)
     with direct_vm.expect_revert("repository url must be github/gitlab/bitbucket https"):
@@ -466,6 +494,7 @@ def test_attestation_digest_commits_findings(direct_vm, direct_deploy):
     fields = (
         "generation", "package_name", "ecosystem", "version", "commit_sha",
         "registry_url", "registry_match", "dist_hash_match", "evidence_available",
+        "commit_evidence_available", "commit_patch_digest", "evidence_code",
         "registry_record_digest", "locked_snapshot_digest",
         "findings", "route_result", "attempt", "attempt_kind", "challenge"
     )
@@ -977,3 +1006,223 @@ def test_no_storage_object_crosses_into_the_nondet_closures(direct_vm, direct_de
     _mock_challenge_evidence(direct_vm)
     c.open_challenge(pkg_key, EVIDENCE_URL)
     assert direct_vm.run_validator() is True
+
+
+# ── Steward-review corrections (Oct 2026) ────────────────────────────────────
+
+def _verified(direct_vm, c, alice=None):
+    if alice is not None:
+        direct_vm.sender = alice
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key)
+    assert _attest(direct_vm, c, pkg_key) == "VERIFIED"
+    return pkg_key
+
+
+def _attest_with_patch(direct_vm, c, pkg_key, **diff_kwargs):
+    _mock_registry(direct_vm)
+    _mock_diff(direct_vm, **diff_kwargs)
+    _mock_llm_attest(direct_vm)  # model would happily say everything is consistent
+    return c.attest_release(pkg_key)
+
+
+def test_verified_attestation_records_bound_commit_evidence(direct_vm, direct_deploy):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _verified(direct_vm, c)
+    a = J(c.get_attestation(pkg_key, 1))
+    assert a["evidence_code"] == "OK" and a["commit_evidence_available"] is True
+    assert a["commit_patch_digest"] == hashlib.sha256(_patch_body().encode()).hexdigest()
+
+
+@pytest.mark.parametrize("status", [403, 404, 500])
+def test_unavailable_commit_evidence_cannot_verify(direct_vm, direct_deploy, status):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key)
+    assert _attest_with_patch(direct_vm, c, pkg_key, body="gone", status=status) == "INCONCLUSIVE"
+    a = J(c.get_attestation(pkg_key, 1))
+    assert a["evidence_code"] == "COMMIT_UNAVAILABLE" and a["commit_evidence_available"] is False
+    assert J(c.get_package(pkg_key))["state"] == "INCONCLUSIVE"
+
+
+def test_html_commit_page_is_never_used_as_a_diff(direct_vm, direct_deploy):
+    """Regression: the old code fell back to the plain commit page (an HTML shell)."""
+    c = direct_deploy(CONTRACT)
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key)
+    assert _attest_with_patch(direct_vm, c, pkg_key, body="x", status=404) == "INCONCLUSIVE"
+    assert J(c.get_attestation(pkg_key, 1))["evidence_code"] == "COMMIT_UNAVAILABLE"
+
+
+@pytest.mark.parametrize("body", [
+    "<html><body>commit page</body></html>",
+    "+ added helper\n- removed fn\n",
+    _patch_body(sha="b" * 40),
+])
+def test_commit_evidence_must_echo_the_locked_sha(direct_vm, direct_deploy, body):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key)
+    assert _attest_with_patch(direct_vm, c, pkg_key, body=body) == "INCONCLUSIVE"
+    assert J(c.get_attestation(pkg_key, 1))["evidence_code"] == "COMMIT_UNBOUND"
+
+
+def test_oversized_commit_patch_is_inconclusive_not_truncated(direct_vm, direct_deploy):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key)
+    big = _patch_body(body="+ line\n" * 3000)
+    assert _attest_with_patch(direct_vm, c, pkg_key, body=big) == "INCONCLUSIVE"
+    assert J(c.get_attestation(pkg_key, 1))["evidence_code"] == "COMMIT_TOO_LARGE"
+
+
+def test_patch_url_is_derived_from_locked_repo_and_sha(direct_vm, direct_deploy):
+    """Only github.com/acme/acme-utils/commit/<locked sha>.patch is mocked; any other URL would fail."""
+    c = direct_deploy(CONTRACT)
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key)
+    _mock_registry(direct_vm)
+    direct_vm.mock_web(
+        rf"^https://github\.com/acme/acme-utils/commit/{COMMIT_SHA}\.patch$",
+        {"status": 200, "body": _patch_body()},
+    )
+    _mock_llm_attest(direct_vm)
+    assert c.attest_release(pkg_key) == "VERIFIED"
+
+
+def test_all_committed_dist_hashes_must_match_registry(direct_vm, direct_deploy):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _register(c)
+    _submit_snapshot(direct_vm, c, pkg_key, _snapshot(dist_hashes=["abc123", "not-in-registry"]))
+    assert _attest(direct_vm, c, pkg_key) == "INCONCLUSIVE"
+    assert J(c.get_attestation(pkg_key, 1))["evidence_code"] == "DIST_HASH_MISMATCH"
+
+
+def test_certify_still_works_with_bound_commit_evidence(direct_vm, direct_deploy):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _verified(direct_vm, c)
+    _advance(direct_vm, REVIEW_WINDOW + 1)
+    digest = c.certify(pkg_key)
+    cert = J(c.get_certification(pkg_key))
+    assert cert["certification_digest"] == digest
+    assert cert["evidence_set"]["commit_patch_digest"]
+
+
+# ── challenge evidence reaches the validators and changes the verdict ─────────
+
+SMOKING_GUN = "Tarball contains postinstall script absent from the commit, see diff line 42"
+
+
+def _challenged(direct_vm, c, alice, bob, text=SMOKING_GUN):
+    pkg_key = _verified(direct_vm, c, alice)
+    direct_vm.sender = bob
+    _mock_challenge_evidence(direct_vm, text=text)
+    c.open_challenge(pkg_key, EVIDENCE_URL)
+    direct_vm.sender = alice
+    direct_vm.clear_mocks()
+    _mock_registry(direct_vm)
+    _mock_diff(direct_vm)
+    return pkg_key
+
+
+def _llm_when_evidence_in_prompt(vm, evidence_status):
+    """Model answers BLOCKED-worthy only if the admitted evidence text is literally in the prompt."""
+    vm.mock_llm(
+        r"(?s).*PacketProof release integrity attestation.*CHALLENGE_EVIDENCE.*postinstall script absent.*",
+        _findings(("PRESERVED", "CONSISTENT", "CONSISTENT"), evidence_status),
+    )
+    vm.mock_llm(
+        r"(?s).*PacketProof release integrity attestation.*",
+        _findings(("PRESERVED", "CONSISTENT", "CONSISTENT"), "CONSISTENT"),
+    )
+
+
+def test_admitted_challenge_evidence_is_in_the_reassessment_prompt_and_can_block(direct_vm, direct_deploy, direct_alice, direct_bob):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _challenged(direct_vm, c, direct_alice, direct_bob)
+    _llm_when_evidence_in_prompt(direct_vm, "INCONSISTENT")
+    assert c.reassess_challenge(pkg_key) == "BLOCKED"
+    p = J(c.get_package(pkg_key))
+    assert p["state"] == "BLOCKED" and p["review_deadline"] == 0
+    a = J(c.get_attestation(pkg_key, 1))
+    assert a["attempt_kind"] == "CHALLENGE"
+    by_rule = {f["rule_id"]: f["status"] for f in a["findings"]}
+    assert by_rule[CHALLENGE_RULE] == "INCONSISTENT"
+    assert a["challenge"]["evidence_digest"] == hashlib.sha256(SMOKING_GUN.encode()).hexdigest()
+
+
+def test_challenge_evidence_that_does_not_hold_up_keeps_release_verified(direct_vm, direct_deploy, direct_alice, direct_bob):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _challenged(direct_vm, c, direct_alice, direct_bob)
+    _llm_when_evidence_in_prompt(direct_vm, "CONSISTENT")
+    assert c.reassess_challenge(pkg_key) == "VERIFIED"
+    assert J(c.get_package(pkg_key))["state"] == "VERIFIED"
+
+
+@pytest.mark.parametrize("status", ["MISSING", "UNREADABLE", "CONFLICTING"])
+def test_uncertain_challenge_evidence_downgrades_to_inconclusive(direct_vm, direct_deploy, direct_alice, direct_bob, status):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _challenged(direct_vm, c, direct_alice, direct_bob)
+    _llm_when_evidence_in_prompt(direct_vm, status)
+    assert c.reassess_challenge(pkg_key) == "INCONCLUSIVE"
+
+
+def test_reassessment_without_the_challenge_rule_finding_is_malformed(direct_vm, direct_deploy, direct_alice, direct_bob):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _challenged(direct_vm, c, direct_alice, direct_bob)
+    direct_vm.mock_llm(r"(?s).*PacketProof release integrity attestation.*", _findings(("PRESERVED", "CONSISTENT", "CONSISTENT")))
+    assert c.reassess_challenge(pkg_key) == "INCONCLUSIVE"
+    assert J(c.get_attestation(pkg_key, 1))["evidence_code"] == "MALFORMED_OUTPUT"
+
+
+def test_reassessment_with_unavailable_commit_cannot_stay_verified(direct_vm, direct_deploy, direct_alice, direct_bob):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _challenged(direct_vm, c, direct_alice, direct_bob)
+    direct_vm.clear_mocks()
+    _mock_registry(direct_vm)
+    _mock_diff(direct_vm, body="gone", status=404)
+    _llm_when_evidence_in_prompt(direct_vm, "CONSISTENT")
+    assert c.reassess_challenge(pkg_key) == "INCONCLUSIVE"
+
+
+def test_validator_agrees_on_challenge_reassessment_and_rejects_a_flipped_challenge_status(direct_vm, direct_deploy, direct_alice, direct_bob):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _challenged(direct_vm, c, direct_alice, direct_bob)
+    _llm_when_evidence_in_prompt(direct_vm, "INCONSISTENT")
+    c.reassess_challenge(pkg_key)
+    assert direct_vm.run_validator() is True
+    a = J(c.get_attestation(pkg_key, 1))
+    # leader claims the challenge rule was CONSISTENT while validators independently see INCONSISTENT
+    forged = {k: a[k] for k in a if k not in ("generation", "attestation_digest")}
+    forged["findings"] = [dict(f, status="CONSISTENT") if f["rule_id"] == CHALLENGE_RULE else f for f in a["findings"]]
+    forged["route_result"] = "VERIFIED"
+    forged["leader_explanations"] = [{"rule_id": f["rule_id"], "text": "ok"} for f in a["findings"]]
+    forged["attempt"] = 0
+    assert direct_vm.run_validator(leader_result=forged) is False
+
+
+def test_validator_rejects_a_verified_claim_when_commit_patch_is_unavailable(direct_vm, direct_deploy):
+    c = direct_deploy(CONTRACT)
+    pkg_key = _verified(direct_vm, c)
+    a = J(c.get_attestation(pkg_key, 1))
+    direct_vm.clear_mocks()
+    _mock_registry(direct_vm)
+    _mock_diff(direct_vm, body="gone", status=404)
+    _mock_llm_attest(direct_vm)
+    forged = {k: a[k] for k in a if k not in ("generation", "attestation_digest")}
+    forged["attempt"] = 0
+    assert direct_vm.run_validator(leader_result=forged) is False
+
+
+# ── repository input restriction ──────────────────────────────────────────────
+
+@pytest.mark.parametrize("url", ["https://github.com/a/b", "https://github.com/Acme-Org/acme.utils_x"])
+def test_valid_github_repo_urls_register(direct_deploy, url):
+    c = direct_deploy(CONTRACT)
+    assert c.register_package(PKG_NAME, ECOSYSTEM_NPM, VERSION, COMMIT_SHA, url, REVIEW_WINDOW)
+
+
+def test_config_advertises_only_github(direct_deploy):
+    c = direct_deploy(CONTRACT)
+    cfg = J(c.get_config())
+    assert cfg["supported_repository_hosts"] == ["github.com"]

@@ -52,7 +52,7 @@ Locks a release intent on-chain before the package is published.
 | `ecosystem` | str | `"npm"` or `"pypi"` |
 | `version` | str | Semver (e.g. `1.2.3`, `2.0.0-rc.1`) |
 | `commit_sha` | str | 40-char hex (Git SHA-1) |
-| `repository_url` | str | `https://github.com/`, `https://gitlab.com/`, or `https://bitbucket.org/` |
+| `repository_url` | str | `https://github.com/<owner>/<repo>` only (no `.git`, trailing slash, query or extra path) |
 | `review_window_seconds` | int | 300–604800 (5 minutes–7 days) |
 
 **Returns:** `pkg_key` — the deterministic storage key `"{ecosystem}:{pkg_name_lower}:{version}"`.
