@@ -547,7 +547,7 @@ class PacketProof(gl.Contract):
         if not _valid_sha1(commit_sha):
             raise gl.vm.UserError("commit sha must be 40-char hex")
         if not _valid_repo_url(repository_url):
-            raise gl.vm.UserError("repository url must be github/gitlab/bitbucket https")
+            raise gl.vm.UserError("repository url must be https://github.com/owner/repo")
         rw = int(review_window_seconds)
         if rw < REVIEW_WINDOW_MIN or rw > REVIEW_WINDOW_MAX:
             raise gl.vm.UserError("review window out of bounds")

@@ -278,7 +278,7 @@ def test_invalid_commit_sha(direct_vm, direct_deploy, sha):
 ])
 def test_invalid_repo_url(direct_vm, direct_deploy, url):
     c = direct_deploy(CONTRACT)
-    with direct_vm.expect_revert("repository url must be github/gitlab/bitbucket https"):
+    with direct_vm.expect_revert("repository url must be https://github.com/owner/repo"):
         c.register_package(PKG_NAME, ECOSYSTEM_NPM, VERSION, COMMIT_SHA, url, REVIEW_WINDOW)
 
 
