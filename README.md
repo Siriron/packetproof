@@ -23,7 +23,7 @@
 
 <br />
 
-**[Contract on Explorer](https://explorer-studio.genlayer.com/address/0x130e93332dc795702c5546BDaf59B3990658B796)** &nbsp;·&nbsp; **[Docs](./docs/architecture.md)** &nbsp;·&nbsp; **[Smart Contract](./contracts/packet_proof.py)**
+**[Contract on Explorer](https://explorer-studio.genlayer.com/address/0x1DB3E1D8707878BdA664d03916BBe4937de472bb)** &nbsp;·&nbsp; **[Docs](./docs/architecture.md)** &nbsp;·&nbsp; **[Smart Contract](./contracts/packet_proof.py)**
 
 </div>
 
@@ -286,7 +286,7 @@ Current deployment:
 
 | Network | Address | Explorer |
 |---|---|---|
-| StudioNet | `0x130e93332dc795702c5546BDaf59B3990658B796` | [View](https://explorer-studio.genlayer.com/address/0x130e93332dc795702c5546BDaf59B3990658B796) |
+| StudioNet | `0x1DB3E1D8707878BdA664d03916BBe4937de472bb` | [View](https://explorer-studio.genlayer.com/address/0x1DB3E1D8707878BdA664d03916BBe4937de472bb) |
 
 ### 2. Deploy the Frontend
 

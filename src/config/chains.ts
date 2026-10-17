@@ -1,7 +1,7 @@
 // PacketProof — GenLayer StudioNet configuration
 // Contract address: update this after deploying via studio.genlayer.com
 
-export const CONTRACT_ADDRESS: string = "0x130e93332dc795702c5546BDaf59B3990658B796"
+export const CONTRACT_ADDRESS: string = "0x1DB3E1D8707878BdA664d03916BBe4937de472bb"
 
 export const isDeployed = (): boolean => /^0x[0-9a-fA-F]{40}$/.test(CONTRACT_ADDRESS) && !/^0x0{40}$/.test(CONTRACT_ADDRESS)
 
